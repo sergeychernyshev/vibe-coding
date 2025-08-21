@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+
+FEATURE_NAME="$1"
+BRANCH_NAME=$(echo "$FEATURE_NAME" | tr ' ' '-')
+
+git checkout main
+git pull
+git checkout -b "$BRANCH_NAME"

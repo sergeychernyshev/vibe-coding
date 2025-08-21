@@ -1,0 +1,26 @@
+#!/bin/bash
+set -e
+
+TITLE="$1"
+REPO="sergeychernyshev/360-maps-photo-downloader"
+PROJECT_ID=3
+
+# Get the ID of the project
+PROJECT_ID=$(gh api graphql -f query='
+  query{
+    repository(owner:"sergeychernyshev", name:"360-maps-photo-downloader"){
+      project(number:3) {
+        id
+      }
+    }
+  }' --jq '.data.repository.project.id')
+
+# Create a new draft issue
+gh api graphql -f query='
+  mutation {
+    addProjectDraftIssue(input: {projectId: "'"$PROJECT_ID"'", title: "'"$TITLE"'"}) {
+      clientMutationId
+    }
+  }'
+
+echo "Created a new draft issue with title: $TITLE"

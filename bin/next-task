@@ -1,0 +1,77 @@
+#!/bin/bash
+set -e
+
+PROJECT_ID=3
+REPO="sergeychernyshev/360-maps-photo-downloader"
+
+# Get the ID of the "Todo" column
+TODO_COLUMN_ID=$(gh api graphql -f query='
+  query{
+    repository(owner:"sergeychernyshev", name:"360-maps-photo-downloader"){
+      project(number:3) {
+        columns(first: 10) {
+          nodes {
+            id
+            name
+          }
+        }
+      }
+    }
+  }' --jq '.data.repository.project.columns.nodes[] | select(.name == "Todo") | .id')
+
+# Get the top item from the "Todo" column
+ITEM=$(gh api graphql -f query='
+  query {
+    node(id: "'"$TODO_COLUMN_ID"'") {
+      ... on ProjectColumn {
+        cards(first: 1) {
+          nodes {
+            id
+            content {
+              ... on Issue {
+                id
+                title
+                number
+              }
+            }
+          }
+        }
+      }
+    }
+  }' --jq '.data.node.cards.nodes[0]')
+
+ITEM_ID=$(echo "$ITEM" | jq -r '.id')
+ISSUE_ID=$(echo "$ITEM" | jq -r '.content.id')
+ISSUE_TITLE=$(echo "$ITEM" | jq -r '.content.title')
+ISSUE_NUMBER=$(echo "$ITEM" | jq -r '.content.number')
+
+# Get the ID of the "In Progress" column
+IN_PROGRESS_COLUMN_ID=$(gh api graphql -f query='
+  query{
+    repository(owner:"sergeychernyshev", name:"360-maps-photo-downloader"){
+      project(number:3) {
+        columns(first: 10) {
+          nodes {
+            id
+            name
+          }
+        }
+      }
+    }
+  }' --jq '.data.repository.project.columns.nodes[] | select(.name == "In Progress") | .id')
+
+# Move the item to the "In Progress" column
+gh api graphql -f query='
+  mutation {
+    moveProjectCard(input: {cardId: "'"$ITEM_ID"'", columnId: "'"$IN_PROGRESS_COLUMN_ID"'"}) {
+      clientMutationId
+    }
+  }'
+
+# Create a new feature branch
+BRANCH_NAME=$(echo "$ISSUE_TITLE" | tr ' ' '-')
+git checkout main
+git pull
+git checkout -b "$BRANCH_NAME"
+
+echo "Created branch $BRANCH_NAME for issue #$ISSUE_NUMBER"

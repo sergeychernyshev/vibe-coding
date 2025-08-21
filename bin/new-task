@@ -1,0 +1,34 @@
+#!/bin/bash
+set -e
+
+TITLE="$1"
+REPO="sergeychernyshev/360-maps-photo-downloader"
+
+# Create a new issue
+ISSUE_URL=$(gh issue create --title "$TITLE" --body "" --repo "$REPO")
+ISSUE_NUMBER=$(echo "$ISSUE_URL" | awk -F'/' '{print $NF}')
+
+# Get the ID of the "Todo" column
+TODO_COLUMN_ID=$(gh api graphql -f query='
+  query{
+    repository(owner:"sergeychernyshev", name:"360-maps-photo-downloader"){
+      project(number:3) {
+        columns(first: 10) {
+          nodes {
+            id
+            name
+          }
+        }
+      }
+    }
+  }' --jq '.data.repository.project.columns.nodes[] | select(.name == "Todo") | .id')
+
+# Add the issue to the "Todo" column
+gh api graphql -f query='
+  mutation {
+    addProjectCard(input: {contentId: "'"$ISSUE_ID"'", projectColumnId: "'"$TODO_COLUMN_ID"'"}) {
+      clientMutationId
+    }
+  }'
+
+echo "Created issue #$ISSUE_NUMBER and added it to the 'Todo' column."

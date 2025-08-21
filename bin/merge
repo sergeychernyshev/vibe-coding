@@ -1,0 +1,11 @@
+#!/bin/bash
+set -e
+
+BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+
+gh pr merge --squash --delete-branch
+
+git checkout main
+git pull
+
+npm restart
