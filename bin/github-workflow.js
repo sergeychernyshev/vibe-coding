@@ -29,7 +29,7 @@ async function getRepoInfo() {
     let remoteUrl = '';
     try {
         remoteUrl = await git.remote(['get-url', 'origin']);
-        if (!remoteUrl) throw new Error(); // Throw to be caught below
+        if (!remoteUrl) throw new Error();
     } catch (error) {
         throw new Error('Could not get remote URL for "origin". Make sure you have a remote named "origin".');
     }
@@ -48,33 +48,24 @@ async function checkAndAddScopes() {
         const tokenLine = lines.find(line => line.includes('Token scopes:'));
         
         if (tokenLine && !tokenLine.includes('project')) {
-            console.log("The 'project' scope is missing from your GitHub CLI authentication.");
-            console.log("Attempting to refresh your token to add the required scope...");
-            
-            // Re-run the command with inherited stdio to allow for user interaction
+            console.log("The 'project' scope is missing. Attempting to refresh your token...");
             await execa('gh', ['auth', 'refresh', '-s', 'project'], { stdio: 'inherit' });
-
             console.log("Token refreshed successfully.");
         } else if (!tokenLine) {
-            // This case might happen if gh auth status output changes.
             throw new Error("Could not determine token scopes from `gh auth status` output.");
         }
     } catch (error) {
         if (error.code === 'ENOENT') {
              throw new Error('The `gh` command-line tool is not installed or not in your PATH.');
         }
-        // Re-throw other errors to be caught by the main execution block
         throw error;
     }
 }
 
-
 async function getAuthToken() {
     try {
         const { stdout: token } = await execa('gh', ['auth', 'token']);
-        if (!token) {
-            throw new Error('The gh auth token command returned an empty value.');
-        }
+        if (!token) throw new Error('The gh auth token command returned an empty value.');
         return token.trim();
     } catch (error) {
         throw new Error('Could not get GitHub authentication token. Please make sure you are logged in with `gh auth login`.');
@@ -85,11 +76,7 @@ let _graphqlWithAuth;
 async function getAuthenticatedGraphql() {
   if (_graphqlWithAuth) return _graphqlWithAuth;
   const token = await getAuthToken();
-  _graphqlWithAuth = graphql.defaults({
-    headers: {
-      authorization: `token ${token}`,
-    },
-  });
+  _graphqlWithAuth = graphql.defaults({ headers: { authorization: `token ${token}` } });
   return _graphqlWithAuth;
 }
 
@@ -97,13 +84,45 @@ let _octokit;
 async function getOctokit() {
     if (_octokit) return _octokit;
     const token = await getAuthToken();
-    const { Octokit } = await import('@octokit/rest');
     _octokit = new Octokit({ auth: token });
     return _octokit;
 }
 
-
 // --- Core Logic ---
+
+async function createProjectAndSetupStatuses(owner, repo, projectName, ownerId, repoId) {
+    const graphql = await getAuthenticatedGraphql();
+    
+    const { createProjectV2: { projectV2 } } = await graphql(`
+        mutation createProject($ownerId: ID!, $title: String!, $repoId: ID!) {
+            createProjectV2(input: {ownerId: $ownerId, title: $title, repositoryId: $repoId}) {
+                projectV2 { id, number }
+            }
+        }
+    `, { ownerId, title: projectName, repoId });
+    console.log(`Successfully created project "${projectName}" (#${projectV2.number}).`);
+
+    const { createProjectV2Field: { projectV2Field } } = await graphql(`
+        mutation createStatusField($projectId: ID!) {
+            createProjectV2Field(input: { projectId: $projectId, dataType: SINGLE_SELECT, name: "Status" }) {
+                projectV2Field { id }
+            }
+        }
+    `, { projectId: projectV2.id });
+    const statusFieldId = projectV2Field.id;
+    console.log('Created "Status" field.');
+
+    await graphql(`
+        mutation addStatusOptions($projectId: ID!, $fieldId: ID!) {
+            todo: addProjectV2FieldOption(input: {projectId: $projectId, fieldId: $fieldId, name: "Todo"}) { clientMutationId }
+            inProgress: addProjectV2FieldOption(input: {projectId: $projectId, fieldId: $fieldId, name: "In Progress"}) { clientMutationId }
+            done: addProjectV2FieldOption(input: {projectId: $projectId, fieldId: $fieldId, name: "Done"}) { clientMutationId }
+        }
+    `, { projectId: projectV2.id, fieldId: statusFieldId });
+    console.log('Added "Todo", "In Progress", and "Done" options to "Status" field.');
+
+    return projectV2.number;
+}
 
 async function getProjectNumber() {
   const gitRoot = await getGitRoot();
@@ -112,101 +131,40 @@ async function getProjectNumber() {
   try {
     const data = await fs.readFile(configPath, 'utf8');
     const match = data.match(/PROJECT_NUMBER=(\d+)/);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
+    if (match) return parseInt(match[1], 10);
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
 
   const { owner, repo } = await getRepoInfo();
-  
   const graphql = await getAuthenticatedGraphql();
   const { repository } = await graphql(`
     query getProjects($owner: String!, $repo: String!) {
       repository(owner: $owner, name: $repo) {
         id
-        projects(first: 100, states: [OPEN]) {
-          nodes {
-            number
-            name
-          }
-        }
+        projectsV2(first: 100, query: "is:open") { nodes { number, title } }
+        owner { id }
       }
     }
   `, { owner, repo });
 
-  const projects = repository.projects.nodes.map(p => ({ name: `${p.number} ${p.name}`, value: p.number }));
+  const projects = repository.projectsV2.nodes.map(p => ({ name: `${p.number} ${p.title}`, value: p.number }));
 
   if (projects.length === 0) {
-    const { createNew } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'createNew',
-        message: 'No open projects found. Would you like to create one?',
-        default: true,
-      },
-    ]);
-
+    const { createNew } = await inquirer.prompt([{ type: 'confirm', name: 'createNew', message: 'No open projects found. Would you like to create one?', default: true }]);
     if (!createNew) {
       console.log('Aborting. No project selected.');
       process.exit(0);
     }
-
-    const defaultProjectName = repo
-        .split('-')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-
-    const { projectName } = await inquirer.prompt([
-        {
-            type: 'input',
-            name: 'projectName',
-            message: 'Enter the name for the new project:',
-            default: defaultProjectName,
-            validate: input => input ? true : 'Project name cannot be empty.',
-        }
-    ]);
-
-    // First, we need the owner's node ID for the createProjectV2 mutation
-    const { repositoryOwner } = await graphql(`
-        query getOwnerId($owner: String!) {
-            repositoryOwner(login: $owner) {
-                id
-            }
-        }
-    `, { owner });
-    const ownerId = repositoryOwner.id;
-
-    // Create the new project (V2) using GraphQL
-    const { createProjectV2: { projectV2: project } } = await graphql(`
-        mutation createProject($ownerId: ID!, $title: String!, $repoId: ID!) {
-            createProjectV2(
-                input: {ownerId: $ownerId, title: $title, repositoryId: $repoId}
-            ) {
-                projectV2 {
-                    number
-                }
-            }
-        }
-    `, { ownerId, title: projectName, repoId: repository.id }); // We need the repo ID here. Let's add it to the initial query.
-
-    console.log(`Successfully created project "${projectName}" (#${project.number}).`);
+    const defaultProjectName = repo.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const { projectName } = await inquirer.prompt([{ type: 'input', name: 'projectName', message: 'Enter the name for the new project:', default: defaultProjectName, validate: i => !!i }]);
     
-    const projectNumber = project.number;
+    const projectNumber = await createProjectAndSetupStatuses(owner, repo, projectName, repository.owner.id, repository.id);
     await fs.writeFile(configPath, `PROJECT_NUMBER=${projectNumber}\n`);
     return projectNumber;
   }
 
-  const { projectNumber } = await inquirer.prompt([
-    {
-      type: 'list',
-      name: 'projectNumber',
-      message: 'Please select a project:',
-      choices: projects,
-    },
-  ]);
-
+  const { projectNumber } = await inquirer.prompt([{ type: 'list', name: 'projectNumber', message: 'Please select a project:', choices: projects }]);
   await fs.writeFile(configPath, `PROJECT_NUMBER=${projectNumber}\n`);
   return projectNumber;
 }
@@ -217,25 +175,17 @@ async function newIdea(title) {
   const graphql = await getAuthenticatedGraphql();
 
   const { repository } = await graphql(`
-    query getProjectId($owner: String!, $repo: String!, $projectNumber: Int!) {
-      repository(owner: $owner, name: $repo) {
-        project(number: $projectNumber) {
-          id
-        }
-      }
+    query getProjectV2Id($owner: String!, $repo: String!, $projectNumber: Int!) {
+      repository(owner: $owner, name: $repo) { projectV2(number: $projectNumber) { id } }
     }
   `, { owner, repo, projectNumber });
+  if (!repository.projectV2) throw new Error(`Could not find Project (V2) with number ${projectNumber}.`);
   
-  const projectId = repository.project.id;
-
   await graphql(`
-    mutation addDraftIssue($projectId: ID!, $title: String!) {
-      addProjectDraftIssue(input: {projectId: $projectId, title: $title}) {
-        clientMutationId
-      }
+    mutation addDraft($projectId: ID!, $title: String!) {
+      addProjectV2DraftIssue(input: {projectId: $projectId, title: $title}) { projectItem { id } }
     }
-  `, { projectId, title });
-
+  `, { projectId: repository.projectV2.id, title });
   console.log(`Created a new draft issue with title: "${title}"`);
 }
 
@@ -249,34 +199,18 @@ async function newTask(title) {
   console.log(`Created issue #${issue.number}`);
 
   const { repository } = await graphql(`
-    query getColumnId($owner: String!, $repo: String!, $projectNumber: Int!) {
-      repository(owner: $owner, name: $repo) {
-        project(number: $projectNumber) {
-          columns(first: 20) {
-            nodes {
-              id
-              name
-            }
-          }
-        }
-      }
+    query getProjectV2Id($owner: String!, $repo: String!, $projectNumber: Int!) {
+      repository(owner: $owner, name: $repo) { projectV2(number: $projectNumber) { id } }
     }
   `, { owner, repo, projectNumber });
-
-  const todoColumn = repository.project.columns.nodes.find(c => c.name === 'Todo');
-  if (!todoColumn) {
-    throw new Error('Could not find a "Todo" column in the project.');
-  }
+  if (!repository.projectV2) throw new Error(`Could not find Project (V2) with number ${projectNumber}.`);
 
   await graphql(`
-    mutation addCard($columnId: ID!, $contentId: ID!) {
-      addProjectCard(input: {projectColumnId: $columnId, contentId: $contentId}) {
-        clientMutationId
-      }
+    mutation addItem($projectId: ID!, $contentId: ID!) {
+      addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) { item { id } }
     }
-  `, { columnId: todoColumn.id, contentId: issue.node_id });
-
-  console.log(`Added issue #${issue.number} to the "Todo" column.`);
+  `, { projectId: repository.projectV2.id, contentId: issue.node_id });
+  console.log(`Added issue #${issue.number} to the project.`);
 }
 
 async function nextTask() {
@@ -285,24 +219,20 @@ async function nextTask() {
   const graphql = await getAuthenticatedGraphql();
 
   const { repository } = await graphql(`
-    query getColumnsAndCards($owner: String!, $repo: String!, $projectNumber: Int!) {
+    query getProjectData($owner: String!, $repo: String!, $projectNumber: Int!) {
       repository(owner: $owner, name: $repo) {
-        project(number: $projectNumber) {
-          columns(first: 20) {
+        projectV2(number: $projectNumber) {
+          id
+          field(name: "Status") {
+            ... on ProjectV2SingleSelectField { id, options { id, name } }
+          }
+          items(first: 50, orderBy: {field: POSITION, direction: ASC}) {
             nodes {
               id
-              name
-              cards(first: 1, archivedStates: [NOT_ARCHIVED]) {
-                nodes {
-                  id
-                  content {
-                    ... on Issue {
-                      id
-                      title
-                      number
-                    }
-                  }
-                }
+              fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { optionId } }
+              content {
+                ... on Issue { title, number }
+                ... on DraftIssue { title }
               }
             }
           }
@@ -311,47 +241,43 @@ async function nextTask() {
     }
   `, { owner, repo, projectNumber });
 
-  const todoColumn = repository.project.columns.nodes.find(c => c.name === 'Todo');
-  const inProgressColumn = repository.project.columns.nodes.find(c => c.name === 'In Progress');
+  const project = repository.projectV2;
+  if (!project) throw new Error(`Could not find Project (V2) with number ${projectNumber}.`);
+  const statusField = project.field;
+  if (!statusField) throw new Error('Project is missing the "Status" field.');
 
-  if (!todoColumn || !inProgressColumn) {
-    throw new Error('Could not find "Todo" and/or "In Progress" columns.');
-  }
-  if (!todoColumn.cards.nodes || todoColumn.cards.nodes.length === 0) {
-    throw new Error('No tasks found in the "Todo" column.');
-  }
+  const todoOption = statusField.options.find(o => o.name === 'Todo');
+  const inProgressOption = statusField.options.find(o => o.name === 'In Progress');
+  if (!todoOption || !inProgressOption) throw new Error('Project is missing "Todo" or "In Progress" options in the "Status" field.');
 
-  const card = todoColumn.cards.nodes[0];
-  const cardId = card.id;
-  const { title: issueTitle, number: issueNumber } = card.content;
+  const todoItem = project.items.nodes.find(item => item.fieldValueByName?.optionId === todoOption.id && item.content);
+  if (!todoItem) throw new Error('No tasks found in the "Todo" column.');
+
+  const { title: issueTitle, number: issueNumber } = todoItem.content;
 
   await graphql(`
-    mutation moveCard($cardId: ID!, $columnId: ID!) {
-      moveProjectCard(input: {cardId: $cardId, columnId: $columnId}) {
-        clientMutationId
+    mutation updateItemStatus($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+      updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: { singleSelectOptionId: $optionId } }) {
+        projectV2Item { id }
       }
     }
-  `, { cardId, columnId: inProgressColumn.id });
-  console.log(`Moved issue #${issueNumber} to "In Progress".`);
+  `, { projectId: project.id, itemId: todoItem.id, fieldId: statusField.id, optionId: inProgressOption.id });
+  console.log(`Moved task "${issueTitle}" to "In Progress".`);
 
   const branchName = issueTitle.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]+/g, '');
   const git = simpleGit();
-  
   await git.checkout('main');
   await git.pull();
   await git.checkout(['-b', branchName]);
-
-  console.log(`Created and switched to branch "${branchName}" for issue #${issueNumber}`);
+  console.log(`Created and switched to branch "${branchName}"`);
 }
 
-
 // --- Main Execution ---
-
-const [command, ...args] = process.argv.slice(2);
 
 (async () => {
   try {
     await checkAndAddScopes();
+    const [command, ...args] = process.argv.slice(2);
     switch (command) {
       case 'new-idea':
         if (!args[0]) throw new Error('A title is required for a new idea.');
