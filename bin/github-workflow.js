@@ -224,7 +224,21 @@ async function nextTask() {
         projectV2(number: $projectNumber) {
           id
           field(name: "Status") {
-            ... on ProjectV2SingleSelectField { id, options { id, name } }
+            __typename
+            ... on ProjectV2Field {
+                name
+                dataType
+            }
+            ... on ProjectV2IterationField {
+                name
+            }
+            ... on ProjectV2SingleSelectField {
+                id
+                options {
+                    id
+                    name
+                }
+            }
           }
           items(first: 50, orderBy: {field: POSITION, direction: ASC}) {
             nodes {
