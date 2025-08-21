@@ -327,7 +327,11 @@ async function nextTask() {
   try {
     await checkAndAddScopes();
     const [command, ...args] = process.argv.slice(2);
-    const title = args.join(' ');
+    let title = args.join(' ');
+
+    if ((command === 'new-idea' || command === 'new-task') && title) {
+      title = title.charAt(0).toUpperCase() + title.slice(1);
+    }
 
     switch (command) {
       case 'new-idea':
