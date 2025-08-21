@@ -2,17 +2,20 @@
 set -e
 
 TITLE="$1"
-REPO="sergeychernyshev/360-maps-photo-downloader"
+REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+OWNER=$(gh repo view --json owner --jq '.owner.login')
+PROJECT_NUMBER=$("$(dirname "$0")/get-project-number")
 
 # Create a new issue
 ISSUE_URL=$(gh issue create --title "$TITLE" --body "" --repo "$REPO")
 ISSUE_NUMBER=$(echo "$ISSUE_URL" | awk -F'/' '{print $NF}')
+ISSUE_ID=$(gh issue view "$ISSUE_URL" --json id --jq .id)
 
 # Get the ID of the "Todo" column
 TODO_COLUMN_ID=$(gh api graphql -f query='
   query{
-    repository(owner:"sergeychernyshev", name:"360-maps-photo-downloader"){
-      project(number:3) {
+    repository(owner:"'"$OWNER"'", name:"'"$(basename $REPO)"'"){
+      project(number:'"$PROJECT_NUMBER"') {
         columns(first: 10) {
           nodes {
             id

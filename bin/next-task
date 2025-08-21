@@ -1,14 +1,15 @@
 #!/bin/bash
 set -e
 
-PROJECT_ID=3
-REPO="sergeychernyshev/360-maps-photo-downloader"
+OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+PROJECT_NUMBER=$("$(dirname "$0")/get-project-number")
 
 # Get the ID of the "Todo" column
 TODO_COLUMN_ID=$(gh api graphql -f query='
   query{
-    repository(owner:"sergeychernyshev", name:"360-maps-photo-downloader"){
-      project(number:3) {
+    repository(owner:"'"$OWNER"'", name:"'"$REPO_NAME"'"){
+      project(number: '"$PROJECT_NUMBER"') {
         columns(first: 10) {
           nodes {
             id
@@ -48,8 +49,8 @@ ISSUE_NUMBER=$(echo "$ITEM" | jq -r '.content.number')
 # Get the ID of the "In Progress" column
 IN_PROGRESS_COLUMN_ID=$(gh api graphql -f query='
   query{
-    repository(owner:"sergeychernyshev", name:"360-maps-photo-downloader"){
-      project(number:3) {
+    repository(owner:"'"$OWNER"'", name:"'"$REPO_NAME"'"){
+      project(number:'"$PROJECT_NUMBER"') {
         columns(first: 10) {
           nodes {
             id
