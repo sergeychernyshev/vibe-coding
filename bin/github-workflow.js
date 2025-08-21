@@ -8,7 +8,7 @@ const { graphql } = require('@octokit/graphql');
 const { Octokit } = require('@octokit/rest');
 const simpleGit = require('simple-git');
 
-const CONFIG_FILE = '.github-variables';
+
 
 // --- Utility Functions ---
 
@@ -125,19 +125,9 @@ async function createProjectAndSetupStatuses(owner, repo, projectName, ownerId, 
 }
 
 async function getProjectNumber() {
-  const gitRoot = await getGitRoot();
-  const configPath = path.join(gitRoot, CONFIG_FILE);
-
-  try {
-    const data = await fs.readFile(configPath, 'utf8');
-    const match = data.match(/PROJECT_NUMBER=(\d+)/);
-    if (match) return parseInt(match[1], 10);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-
   const { owner, repo } = await getRepoInfo();
   const graphql = await getAuthenticatedGraphql();
+
   const { repository } = await graphql(`
     query getProjects($owner: String!, $repo: String!) {
       repository(owner: $owner, name: $repo) {
@@ -160,12 +150,14 @@ async function getProjectNumber() {
     const { projectName } = await inquirer.prompt([{ type: 'input', name: 'projectName', message: 'Enter the name for the new project:', default: defaultProjectName, validate: i => !!i }]);
     
     const projectNumber = await createProjectAndSetupStatuses(owner, repo, projectName, repository.owner.id, repository.id);
-    await fs.writeFile(configPath, `PROJECT_NUMBER=${projectNumber}\n`);
     return projectNumber;
   }
 
+  if (projects.length === 1) {
+    return projects[0].value;
+  }
+
   const { projectNumber } = await inquirer.prompt([{ type: 'list', name: 'projectNumber', message: 'Please select a project:', choices: projects }]);
-  await fs.writeFile(configPath, `PROJECT_NUMBER=${projectNumber}\n`);
   return projectNumber;
 }
 
