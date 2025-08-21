@@ -278,14 +278,16 @@ async function nextTask() {
   try {
     await checkAndAddScopes();
     const [command, ...args] = process.argv.slice(2);
+    const title = args.join(' ');
+
     switch (command) {
       case 'new-idea':
-        if (!args[0]) throw new Error('A title is required for a new idea.');
-        await newIdea(args[0]);
+        if (!title) throw new Error('A title is required for a new idea.');
+        await newIdea(title);
         break;
       case 'new-task':
-        if (!args[0]) throw new Error('A title is required for a new task.');
-        await newTask(args[0]);
+        if (!title) throw new Error('A title is required for a new task.');
+        await newTask(title);
         break;
       case 'next-task':
         await nextTask();
