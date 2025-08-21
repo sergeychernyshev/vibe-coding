@@ -41,6 +41,34 @@ async function getRepoInfo() {
     return { owner: match[1], repo: match[2] };
 }
 
+async function checkAndAddScopes() {
+    try {
+        const { stdout } = await execa('gh', ['auth', 'status']);
+        const lines = stdout.split('\n');
+        const tokenLine = lines.find(line => line.includes('Token scopes:'));
+        
+        if (tokenLine && !tokenLine.includes('project')) {
+            console.log("The 'project' scope is missing from your GitHub CLI authentication.");
+            console.log("Attempting to refresh your token to add the required scope...");
+            
+            // Re-run the command with inherited stdio to allow for user interaction
+            await execa('gh', ['auth', 'refresh', '-s', 'project'], { stdio: 'inherit' });
+
+            console.log("Token refreshed successfully.");
+        } else if (!tokenLine) {
+            // This case might happen if gh auth status output changes.
+            throw new Error("Could not determine token scopes from `gh auth status` output.");
+        }
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+             throw new Error('The `gh` command-line tool is not installed or not in your PATH.');
+        }
+        // Re-throw other errors to be caught by the main execution block
+        throw error;
+    }
+}
+
+
 async function getAuthToken() {
     try {
         const { stdout: token } = await execa('gh', ['auth', 'token']);
@@ -49,9 +77,6 @@ async function getAuthToken() {
         }
         return token.trim();
     } catch (error) {
-        if (error.code === 'ENOENT') {
-             throw new Error('The `gh` command-line tool is not installed or not in your PATH.');
-        }
         throw new Error('Could not get GitHub authentication token. Please make sure you are logged in with `gh auth login`.');
     }
 }
@@ -72,6 +97,7 @@ let _octokit;
 async function getOctokit() {
     if (_octokit) return _octokit;
     const token = await getAuthToken();
+    const { Octokit } = await import('@octokit/rest');
     _octokit = new Octokit({ auth: token });
     return _octokit;
 }
@@ -99,6 +125,7 @@ async function getProjectNumber() {
   const { repository } = await graphql(`
     query getProjects($owner: String!, $repo: String!) {
       repository(owner: $owner, name: $repo) {
+        id
         projects(first: 100, states: [OPEN]) {
           nodes {
             number
@@ -141,17 +168,32 @@ async function getProjectNumber() {
         }
     ]);
 
-    const octokit = await getOctokit();
-    
-    const { data: newProject } = await octokit.projects.createForRepo({
-        owner,
-        repo,
-        name: projectName,
-    });
+    // First, we need the owner's node ID for the createProjectV2 mutation
+    const { repositoryOwner } = await graphql(`
+        query getOwnerId($owner: String!) {
+            repositoryOwner(login: $owner) {
+                id
+            }
+        }
+    `, { owner });
+    const ownerId = repositoryOwner.id;
 
-    console.log(`Successfully created project "${newProject.name}" (#${newProject.number}).`);
+    // Create the new project (V2) using GraphQL
+    const { createProjectV2: { projectV2: project } } = await graphql(`
+        mutation createProject($ownerId: ID!, $title: String!, $repoId: ID!) {
+            createProjectV2(
+                input: {ownerId: $ownerId, title: $title, repositoryId: $repoId}
+            ) {
+                projectV2 {
+                    number
+                }
+            }
+        }
+    `, { ownerId, title: projectName, repoId: repository.id }); // We need the repo ID here. Let's add it to the initial query.
+
+    console.log(`Successfully created project "${projectName}" (#${project.number}).`);
     
-    const projectNumber = newProject.number;
+    const projectNumber = project.number;
     await fs.writeFile(configPath, `PROJECT_NUMBER=${projectNumber}\n`);
     return projectNumber;
   }
@@ -309,6 +351,7 @@ const [command, ...args] = process.argv.slice(2);
 
 (async () => {
   try {
+    await checkAndAddScopes();
     switch (command) {
       case 'new-idea':
         if (!args[0]) throw new Error('A title is required for a new idea.');
