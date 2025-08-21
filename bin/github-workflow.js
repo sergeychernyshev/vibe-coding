@@ -199,18 +199,53 @@ async function newTask(title) {
   console.log(`Created issue #${issue.number}`);
 
   const { repository } = await graphql(`
-    query getProjectV2Id($owner: String!, $repo: String!, $projectNumber: Int!) {
-      repository(owner: $owner, name: $repo) { projectV2(number: $projectNumber) { id } }
+    query getProjectAndStatusField($owner: String!, $repo: String!, $projectNumber: Int!) {
+      repository(owner: $owner, name: $repo) {
+        projectV2(number: $projectNumber) {
+          id
+          field(name: "Status") {
+            __typename
+            ... on ProjectV2SingleSelectField {
+              id
+              options {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
     }
   `, { owner, repo, projectNumber });
   if (!repository.projectV2) throw new Error(`Could not find Project (V2) with number ${projectNumber}.`);
 
-  await graphql(`
+  const project = repository.projectV2;
+  const statusField = project.field;
+  if (!statusField || statusField.__typename !== 'ProjectV2SingleSelectField') {
+      throw new Error('Project is missing the "Status" field or it is not a single select field.');
+  }
+
+  const todoOption = statusField.options.find(o => o.name === 'Todo');
+  if (!todoOption) {
+      throw new Error('Project is missing the "Todo" option in the "Status" field.');
+  }
+
+
+  const { addProjectV2ItemById: { item: projectItem } } = await graphql(`
     mutation addItem($projectId: ID!, $contentId: ID!) {
       addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) { item { id } }
     }
-  `, { projectId: repository.projectV2.id, contentId: issue.node_id });
+  `, { projectId: project.id, contentId: issue.node_id });
   console.log(`Added issue #${issue.number} to the project.`);
+
+  await graphql(`
+    mutation updateItemStatus($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+      updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: { singleSelectOptionId: $optionId } }) {
+        projectV2Item { id }
+      }
+    }
+  `, { projectId: project.id, itemId: projectItem.id, fieldId: statusField.id, optionId: todoOption.id });
+  console.log(`Set status for issue #${issue.number} to "Todo".`);
 }
 
 async function nextTask() {
