@@ -1,0 +1,28 @@
+{
+  "name": "vibe-coding",
+  "version": "1.0.0",
+  "description": "A collection of shell scripts to automate your GitHub workflow, helping you stay in the zone and focus on coding.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sergeychernyshev/vibe-coding.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/sergeychernyshev/vibe-coding/issues"
+  },
+  "homepage": "https://github.com/sergeychernyshev/vibe-coding#readme",
+  "dependencies": {
+    "@octokit/graphql": "^9.0.1",
+    "@octokit/rest": "^22.0.0",
+    "execa": "^9.6.0",
+    "inquirer": "^7.3.3",
+    "simple-git": "^3.28.0"
+  }
+}
