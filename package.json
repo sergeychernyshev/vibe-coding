@@ -4,6 +4,9 @@
   "description": "A collection of shell scripts to automate your GitHub workflow, helping you stay in the zone and focus on coding.",
   "main": "index.js",
   "scripts": {
+    "start": "./bin/start-stream.sh",
+    "compile:macos": "osacompile -o bin/start-stream.app bin/start-stream.applescript",
+    "clean": "rm -rf bin/start-stream.app node_modules",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
