@@ -400,9 +400,11 @@ async function nextTask() {
                   ... on Issue {
                     title
                     number
+                    body
                   }
                   ... on DraftIssue {
                     title
+                    body
                   }
                 }
               }
@@ -432,7 +434,7 @@ async function nextTask() {
   );
   if (!todoItem) throw new Error('No tasks found in the "Todo" column.');
 
-  const { title: issueTitle, number: issueNumber } = todoItem.content;
+  const { title: issueTitle, number: issueNumber, body: issueBody } = todoItem.content;
 
   await graphql(
     `
@@ -464,6 +466,12 @@ async function nextTask() {
     },
   );
   console.log(`Moved task "${issueTitle}" to "In Progress".`);
+
+  if (issueBody) {
+    console.log("\nTask Description:");
+    console.log(issueBody);
+    console.log("\n");
+  }
 
   const branchName = issueTitle
     .toLowerCase()
