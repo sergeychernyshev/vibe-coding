@@ -473,10 +473,10 @@ async function nextTask() {
     console.log("\n");
   }
 
-  const branchName = issueTitle
+  const branchName = `${issueNumber}-${issueTitle
     .toLowerCase()
     .replace(/\s+/g, "-")
-    .replace(/[^\w-]+/g, "");
+    .replace(/[^\w-]+/g, "")}`;
   const git = simpleGit();
   await git.checkout("main");
   await git.pull();
@@ -496,16 +496,36 @@ async function completeTask(targetStatus = "Done") {
     const data = JSON.parse(stdout);
     closingIssuesItems = data.closingIssuesItems;
   } catch (error) {
-    console.log("Could not find a linked PR or issue. Skipping project update.");
+    console.log(
+      "Could not find a linked PR or issue via gh pr view. Checking branch name...",
+    );
+  }
+
+  let issueNumber;
+
+  if (closingIssuesItems && closingIssuesItems.length > 0) {
+    issueNumber = closingIssuesItems[0].number;
+  } else {
+    try {
+      const git = simpleGit();
+      const branchName = await git.revparse(["--abbrev-ref", "HEAD"]);
+      const match = branchName.match(/^(\d+)-/);
+      if (match) {
+        issueNumber = parseInt(match[1], 10);
+        console.log(`Extracted issue #${issueNumber} from branch "${branchName}".`);
+      }
+    } catch (e) {
+      // Ignore git errors
+    }
+  }
+
+  if (!issueNumber) {
+    console.log(
+      "No linked issue found for the current pull request or branch name.",
+    );
     return;
   }
 
-  if (!closingIssuesItems || closingIssuesItems.length === 0) {
-    console.log("No linked issue found for the current pull request.");
-    return;
-  }
-
-  const issue = closingIssuesItems[0];
   const projectId = await getProjectId();
   const graphql = await getAuthenticatedGraphql();
 
@@ -562,11 +582,11 @@ async function completeTask(targetStatus = "Done") {
   }
 
   const projectItem = project.items.nodes.find(
-    (item) => item.content && item.content.number === issue.number,
+    (item) => item.content && item.content.number === issueNumber,
   );
 
   if (!projectItem) {
-    console.log(`Issue #${issue.number} is not in the project.`);
+    console.log(`Issue #${issueNumber} is not in the project.`);
     return;
   }
 
@@ -600,7 +620,7 @@ async function completeTask(targetStatus = "Done") {
     },
   );
   console.log(
-    `Moved task linked to issue #${issue.number} to "${targetStatus}".`,
+    `Moved task linked to issue #${issueNumber} to "${targetStatus}".`,
   );
 }
 
