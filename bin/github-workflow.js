@@ -484,6 +484,126 @@ async function nextTask() {
   console.log(`Created and switched to branch "${branchName}"`);
 }
 
+async function completeTask(targetStatus = "Done") {
+  let closingIssuesItems;
+  try {
+    const { stdout } = await execa("gh", [
+      "pr",
+      "view",
+      "--json",
+      "closingIssuesItems",
+    ]);
+    const data = JSON.parse(stdout);
+    closingIssuesItems = data.closingIssuesItems;
+  } catch (error) {
+    console.log("Could not find a linked PR or issue. Skipping project update.");
+    return;
+  }
+
+  if (!closingIssuesItems || closingIssuesItems.length === 0) {
+    console.log("No linked issue found for the current pull request.");
+    return;
+  }
+
+  const issue = closingIssuesItems[0];
+  const projectId = await getProjectId();
+  const graphql = await getAuthenticatedGraphql();
+
+  const { node: project } = await graphql(
+    `
+      query getProjectData($projectId: ID!) {
+        node(id: $projectId) {
+          ... on ProjectV2 {
+            id
+            field(name: "Status") {
+              __typename
+              ... on ProjectV2SingleSelectField {
+                id
+                options {
+                  id
+                  name
+                }
+              }
+            }
+            items(first: 100) {
+              nodes {
+                id
+                content {
+                  ... on Issue {
+                    number
+                  }
+                  ... on DraftIssue {
+                    title
+                  }
+                }
+                fieldValueByName(name: "Status") {
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    optionId
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    { projectId },
+  );
+
+  if (!project) throw new Error(`Could not find Project with ID ${projectId}.`);
+  const statusField = project.field;
+  if (!statusField) throw new Error('Project is missing the "Status" field.');
+
+  const statusOption = statusField.options.find((o) => o.name === targetStatus);
+  if (!statusOption) {
+    throw new Error(
+      `Project is missing the "${targetStatus}" option in the "Status" field. Available options: ${statusField.options.map((o) => o.name).join(", ")}`,
+    );
+  }
+
+  const projectItem = project.items.nodes.find(
+    (item) => item.content && item.content.number === issue.number,
+  );
+
+  if (!projectItem) {
+    console.log(`Issue #${issue.number} is not in the project.`);
+    return;
+  }
+
+  await graphql(
+    `
+      mutation updateItemStatus(
+        $projectId: ID!
+        $itemId: ID!
+        $fieldId: ID!
+        $optionId: String!
+      ) {
+        updateProjectV2ItemFieldValue(
+          input: {
+            projectId: $projectId
+            itemId: $itemId
+            fieldId: $fieldId
+            value: { singleSelectOptionId: $optionId }
+          }
+        ) {
+          projectV2Item {
+            id
+          }
+        }
+      }
+    `,
+    {
+      projectId: project.id,
+      itemId: projectItem.id,
+      fieldId: statusField.id,
+      optionId: statusOption.id,
+    },
+  );
+  console.log(
+    `Moved task linked to issue #${issue.number} to "${targetStatus}".`,
+  );
+}
+
 // --- Main Execution ---
 
 (async () => {
@@ -507,6 +627,9 @@ async function nextTask() {
         break;
       case "next-task":
         await nextTask();
+        break;
+      case "complete-task":
+        await completeTask(args[0]);
         break;
       default:
         console.log(`Unknown command: ${command}`);
