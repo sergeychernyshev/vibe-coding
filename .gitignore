@@ -2,3 +2,4 @@
 /node_modules
 /bin/start-stream.app
 .DS_Store
+.env
