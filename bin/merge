@@ -3,9 +3,9 @@ set -e
 
 BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
 
-"$(dirname "$0")/github-workflow.js" complete-task "Done"
-
 gh pr merge --squash --delete-branch
 
 git checkout main
 git pull
+
+"$(dirname "$0")/github-workflow.js" complete-task "Done"
